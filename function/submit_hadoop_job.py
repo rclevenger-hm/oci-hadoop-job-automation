@@ -1,54 +1,70 @@
-import oci
-import paramiko
 import json
+import os
+
+import paramiko
+
+from job_command import build_hadoop_command, validate_job_params
+
+
+def _required_env(name):
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"required environment variable {name} is not set")
+    return value
+
 
 def submit_hadoop_job(job_params):
+    params = validate_job_params(job_params)
+    instance_ip = _required_env("HADOOP_HOST")
+    username = os.environ.get("HADOOP_USER", "opc")
+    private_key_path = _required_env("HADOOP_PRIVATE_KEY")
+
     ssh_client = paramiko.SSHClient()
     ssh_client.load_system_host_keys()
+    ssh_client.set_missing_host_key_policy(paramiko.RejectPolicy())
 
-    instance_ip = "YOUR_INSTANCE_IP"
-    private_key_path = "/path/to/your/private/key"
+    try:
+        ssh_key = paramiko.RSAKey(filename=private_key_path)
+        ssh_client.connect(
+            hostname=instance_ip,
+            username=username,
+            pkey=ssh_key,
+            timeout=10,
+            banner_timeout=10,
+            auth_timeout=10,
+        )
 
-    # Connect to the Hadoop cluster using SSH
-    ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh_key = paramiko.RSAKey(filename=private_key_path)
-    ssh_client.connect(hostname=instance_ip, username="opc", pkey=ssh_key)
+        command = build_hadoop_command(params)
+        _, stdout, stderr = ssh_client.exec_command(command, timeout=30)
+        exit_status = stdout.channel.recv_exit_status()
+        stdout_text = stdout.read().decode("utf-8", errors="replace")
+        stderr_text = stderr.read().decode("utf-8", errors="replace")
 
-    # Submit the Hadoop job using SSH
-    command = f'hadoop jar {job_params["jar_path"]} {job_params["job_class"]} {job_params["input_path"]} {job_params["output_path"]}'
-    stdin, stdout, stderr = ssh_client.exec_command(command)
+        if exit_status != 0:
+            raise RuntimeError(
+                f"Hadoop command failed with exit status {exit_status}: {stderr_text.strip()}"
+            )
 
-    # Close SSH connection
-    ssh_client.close()
+        return stdout_text
+    finally:
+        ssh_client.close()
 
-    return stdout.read()
 
 def handle_request(request):
     try:
-        job_params = {
-            "jar_path": request.get("jar_path"),
-            "job_class": request.get("job_class"),
-            "input_path": request.get("input_path"),
-            "output_path": request.get("output_path")
-        }
-
-        job_status = submit_hadoop_job(job_params)
-
+        job_status = submit_hadoop_job(request)
         return {
             "message": "Hadoop job submitted successfully",
-            "job_status": job_status.decode('utf-8')
+            "job_status": job_status,
         }
-    except Exception as e:
-        return {
-            "error": str(e)
-        }
+    except (ValueError, RuntimeError, OSError, paramiko.SSHException) as exc:
+        return {"error": str(exc)}
+
 
 def handler(ctx, data):
     try:
-        request = json.loads(data.decode('utf-8'))
-        response = handle_request(request)
-        return response
-    except Exception as e:
-        return {
-            "error": str(e)
-        }
+        request = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return {"error": f"invalid JSON request: {exc}"}
+
+    return handle_request(request)

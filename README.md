@@ -1,48 +1,66 @@
-```markdown
 # OCI Hadoop Job Automation
 
-Automate the submission and management of Hadoop jobs on Oracle Cloud Infrastructure (OCI) clusters using serverless functions. This project showcases the power of OCI Functions in streamlining Hadoop job operations, allowing you to focus on your data processing tasks rather than manual cluster management.
+Automate validated Hadoop command submission to an OCI-hosted cluster through an OCI Function and SSH. The project focuses on safe request handling, bounded network execution, and an explicit operational boundary for short-running jobs.
 
-## Key Features
+## What it demonstrates
 
-- **Seamless Job Submission:** Submit Hadoop jobs to your OCI-hosted Hadoop cluster effortlessly. Define job parameters, input, and output paths using a simple JSON request.
+- **Validated job requests:** required fields are checked before any remote command is constructed.
+- **Safer command construction:** path arguments are shell-quoted and the Java job class is constrained to an allowlisted character pattern.
+- **SSH trust enforcement:** system host keys are loaded and unknown hosts are rejected rather than automatically trusted.
+- **Bounded remote execution:** connection/authentication setup and remote command execution use explicit timeouts.
+- **Clear failure propagation:** non-zero Hadoop exits and SSH/configuration failures are returned to the caller with useful context.
 
-- **Resource Efficiency:** Automate the execution of Hadoop jobs on the cluster, optimizing resource utilization without manual intervention.
+## Current execution model
 
-- **Status Updates:** Get real-time job status updates directly from the function. Monitor the progress of your jobs through convenient queries.
+The implementation is synchronous: the function connects to the configured Hadoop host, runs the command, waits for its exit status, and returns stdout on success. It does **not** currently provide a background job-control plane, persisted job state, or a separate real-time status endpoint.
 
-- **Flexibility:** Customize job parameters and configurations to match the needs of your specific Hadoop tasks.
+That makes the current design most appropriate for short submission/management commands. Long-running Hadoop workloads should evolve toward submit-and-return semantics with a stable job/application identifier, persisted status, idempotency, and a separate status query path.
 
-## Getting Started
+See [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for failure modes, retry guidance, incident triage, observability recommendations, and the safe evolution path for longer-running jobs.
 
-Follow these steps to set up and deploy the OCI Hadoop Job Automation function:
+## Getting started
 
-1. **OCI Configuration:** Place your OCI configuration file (`config`) in the `.oci/` directory.
+1. Provide the function runtime with the required configuration:
+   - `HADOOP_HOST`: target Hadoop host/private IP.
+   - `HADOOP_PRIVATE_KEY`: path to the private key available to the runtime.
+   - `HADOOP_USER`: optional SSH username; defaults to `opc`.
+2. Ensure the target host key is present in the runtime's known-hosts data. Unknown hosts are intentionally rejected.
+3. Install dependencies from `function/requirements.txt`.
+4. Deploy the function using your normal OCI Functions workflow.
 
-2. **Function Setup:** Inside the `function/` directory, find `submit_hadoop_job.py`, which handles job submission and management. Configure any necessary parameters.
+Do not commit private keys or credentials to this repository.
 
-3. **Dependencies:** Ensure you have the required Python dependencies listed in `function/requirements.txt`.
+## Request shape
 
-4. **Deployment:** Deploy the function on OCI using the appropriate tools or scripts for your environment.
-
-## Usage
-
-1. Submit a Hadoop job by sending a JSON request to the function with the required parameters:
+Submit a JSON object containing the required Hadoop command inputs:
 
 ```json
 {
-    "jar_path": "/path/to/your/hadoop/job.jar",
-    "job_class": "com.example.hadoop.JobClass",
-    "input_path": "/path/to/input",
-    "output_path": "/path/to/output"
+  "jar_path": "/path/to/your/hadoop/job.jar",
+  "job_class": "com.example.hadoop.JobClass",
+  "input_path": "/path/to/input",
+  "output_path": "/path/to/output"
 }
 ```
 
-2. Monitor job status by querying the function for updates.
+The function validates all four fields before connecting to the cluster.
 
-## Contributing
+## Validation
 
-Contributions are welcome! If you find any issues or have suggestions for improvements, please open an issue or create a pull request.
+Run the unit tests from the repository root:
+
+```bash
+python -m unittest discover -s test -v
+```
+
+The tests cover expected command construction, shell metacharacter quoting, invalid job-class rejection, missing required fields, and unsupported control characters.
+
+## Operational cautions
+
+- A remote execution timeout is an **unknown outcome**, not proof that the Hadoop command never started.
+- The current API has no idempotency key, so ambiguous failures should be checked against cluster state before retrying.
+- Host-key verification should never be disabled as a recovery shortcut.
+- Raw credentials, key material, and sensitive payloads should not be logged.
 
 ## License
 

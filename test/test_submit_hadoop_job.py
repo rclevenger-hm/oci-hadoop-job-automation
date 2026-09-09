@@ -95,6 +95,16 @@ class SubmitHadoopJobTests(unittest.TestCase):
         response = submit_hadoop_job.handler(None, b"{not-json")
         self.assertIn("invalid JSON request", response["error"])
 
+    def test_handler_rejects_non_byte_request_body(self):
+        response = submit_hadoop_job.handler(None, {"jar_path": "/tmp/job.jar"})
+        self.assertEqual(response, {"error": "request body must be bytes"})
+
+    @patch.object(submit_hadoop_job, "handle_request")
+    def test_handler_rejects_oversized_body_before_parsing_or_submission(self, handle_request):
+        response = submit_hadoop_job.handler(None, b"x" * (submit_hadoop_job.MAX_REQUEST_BYTES + 1))
+        self.assertIn("exceeds", response["error"])
+        handle_request.assert_not_called()
+
     @patch.object(submit_hadoop_job, "submit_hadoop_job")
     def test_handle_request_preserves_success_contract(self, submit):
         submit.return_value = "submitted"

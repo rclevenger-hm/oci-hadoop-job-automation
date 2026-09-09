@@ -6,6 +6,9 @@ import paramiko
 from job_command import build_hadoop_command, validate_job_params
 
 
+MAX_REQUEST_BYTES = 64 * 1024
+
+
 def _required_env(name):
     value = os.environ.get(name)
     if not value:
@@ -62,6 +65,11 @@ def handle_request(request):
 
 
 def handler(ctx, data):
+    if not isinstance(data, (bytes, bytearray)):
+        return {"error": "request body must be bytes"}
+    if len(data) > MAX_REQUEST_BYTES:
+        return {"error": f"request body exceeds {MAX_REQUEST_BYTES} byte limit"}
+
     try:
         request = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:

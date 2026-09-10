@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 
 import paramiko
@@ -7,6 +8,7 @@ from job_command import build_hadoop_command, validate_job_params
 
 
 MAX_REQUEST_BYTES = 64 * 1024
+LOGGER = logging.getLogger(__name__)
 
 
 def _required_env(name):
@@ -60,8 +62,11 @@ def handle_request(request):
             "message": "Hadoop job submitted successfully",
             "job_status": job_status,
         }
-    except (ValueError, RuntimeError, OSError, paramiko.SSHException) as exc:
+    except ValueError as exc:
         return {"error": str(exc)}
+    except (RuntimeError, OSError, paramiko.SSHException):
+        LOGGER.exception("Hadoop job submission failed")
+        return {"error": "job submission failed"}
 
 
 def handler(ctx, data):

@@ -72,7 +72,7 @@ class SubmitHadoopJobTests(unittest.TestCase):
 
     @patch.object(submit_hadoop_job.paramiko, "RSAKey")
     @patch.object(submit_hadoop_job.paramiko, "SSHClient")
-    def test_nonzero_exit_surfaces_stderr_and_still_closes(self, ssh_client_cls, rsa_key_cls):
+    def test_nonzero_exit_surfaces_stderr_in_internal_exception_and_still_closes(self, ssh_client_cls, rsa_key_cls):
         client = ssh_client_cls.return_value
         client.exec_command.return_value = (
             MagicMock(),
@@ -86,10 +86,23 @@ class SubmitHadoopJobTests(unittest.TestCase):
 
         client.close.assert_called_once_with()
 
-    def test_missing_required_environment_is_returned_as_error(self):
+    def test_missing_required_environment_returns_generic_submission_error(self):
         with patch.dict(os.environ, {}, clear=True):
             response = submit_hadoop_job.handle_request(VALID_JOB)
-        self.assertIn("HADOOP_HOST", response["error"])
+        self.assertEqual(response, {"error": "job submission failed"})
+
+    @patch.object(submit_hadoop_job, "submit_hadoop_job")
+    def test_internal_submission_details_are_not_returned_to_client(self, submit):
+        submit.side_effect = RuntimeError("ssh stderr included a private host path")
+        response = submit_hadoop_job.handle_request(VALID_JOB)
+        self.assertEqual(response, {"error": "job submission failed"})
+        self.assertNotIn("private host", json.dumps(response))
+
+    @patch.object(submit_hadoop_job, "submit_hadoop_job")
+    def test_validation_errors_remain_actionable_client_errors(self, submit):
+        submit.side_effect = ValueError("job_class is required")
+        response = submit_hadoop_job.handle_request(VALID_JOB)
+        self.assertEqual(response, {"error": "job_class is required"})
 
     def test_invalid_json_handler_returns_safe_error(self):
         response = submit_hadoop_job.handler(None, b"{not-json")

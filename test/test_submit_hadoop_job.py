@@ -27,6 +27,14 @@ class FakeStream(io.BytesIO):
         self.channel.recv_exit_status.return_value = exit_status
 
 
+class FakeContext:
+    def __init__(self, call_id="call-123"):
+        self.call_id = call_id
+
+    def CallID(self):
+        return self.call_id
+
+
 class SubmitHadoopJobTests(unittest.TestCase):
     def env(self):
         return patch.dict(
@@ -125,6 +133,35 @@ class SubmitHadoopJobTests(unittest.TestCase):
         self.assertEqual(
             response,
             {"message": "Hadoop job submitted successfully", "job_status": "submitted"},
+        )
+
+    @patch.object(submit_hadoop_job, "handle_request")
+    def test_handler_adds_oci_call_id_to_success_response(self, handle_request):
+        handle_request.return_value = {
+            "message": "Hadoop job submitted successfully",
+            "job_status": "submitted",
+        }
+        response = submit_hadoop_job.handler(
+            FakeContext("call-success"),
+            json.dumps(VALID_JOB).encode("utf-8"),
+        )
+        self.assertEqual(response["request_id"], "call-success")
+        handle_request.assert_called_once_with(VALID_JOB, request_id="call-success")
+
+    def test_handler_adds_oci_call_id_to_early_validation_errors(self):
+        response = submit_hadoop_job.handler(FakeContext("call-invalid"), b"{not-json")
+        self.assertEqual(response["request_id"], "call-invalid")
+        self.assertIn("invalid JSON request", response["error"])
+
+    @patch.object(submit_hadoop_job.LOGGER, "exception")
+    @patch.object(submit_hadoop_job, "submit_hadoop_job")
+    def test_internal_failure_log_carries_request_id(self, submit, log_exception):
+        submit.side_effect = RuntimeError("private runtime detail")
+        response = submit_hadoop_job.handle_request(VALID_JOB, request_id="call-failure")
+        self.assertEqual(response, {"error": "job submission failed"})
+        log_exception.assert_called_once_with(
+            "Hadoop job submission failed request_id=%s",
+            "call-failure",
         )
 
 

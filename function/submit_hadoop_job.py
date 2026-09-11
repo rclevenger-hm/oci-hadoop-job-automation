@@ -18,6 +18,22 @@ def _required_env(name):
     return value
 
 
+def _request_id(ctx):
+    if ctx is None or not hasattr(ctx, "CallID"):
+        return None
+    try:
+        value = ctx.CallID()
+    except Exception:  # pragma: no cover - defensive against runtime context differences
+        return None
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _with_request_id(response, request_id):
+    if not request_id:
+        return response
+    return {**response, "request_id": request_id}
+
+
 def submit_hadoop_job(job_params):
     params = validate_job_params(job_params)
     instance_ip = _required_env("HADOOP_HOST")
@@ -55,7 +71,7 @@ def submit_hadoop_job(job_params):
         ssh_client.close()
 
 
-def handle_request(request):
+def handle_request(request, request_id=None):
     try:
         job_status = submit_hadoop_job(request)
         return {
@@ -65,19 +81,28 @@ def handle_request(request):
     except ValueError as exc:
         return {"error": str(exc)}
     except (RuntimeError, OSError, paramiko.SSHException):
-        LOGGER.exception("Hadoop job submission failed")
+        LOGGER.exception(
+            "Hadoop job submission failed request_id=%s",
+            request_id or "unknown",
+        )
         return {"error": "job submission failed"}
 
 
 def handler(ctx, data):
+    request_id = _request_id(ctx)
+
     if not isinstance(data, (bytes, bytearray)):
-        return {"error": "request body must be bytes"}
+        return _with_request_id({"error": "request body must be bytes"}, request_id)
     if len(data) > MAX_REQUEST_BYTES:
-        return {"error": f"request body exceeds {MAX_REQUEST_BYTES} byte limit"}
+        return _with_request_id(
+            {"error": f"request body exceeds {MAX_REQUEST_BYTES} byte limit"},
+            request_id,
+        )
 
     try:
         request = json.loads(data.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        return {"error": f"invalid JSON request: {exc}"}
+        return _with_request_id({"error": f"invalid JSON request: {exc}"}, request_id)
 
-    return handle_request(request)
+    response = handle_request(request, request_id=request_id)
+    return _with_request_id(response, request_id)

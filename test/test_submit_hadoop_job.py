@@ -94,6 +94,23 @@ class SubmitHadoopJobTests(unittest.TestCase):
 
         client.close.assert_called_once_with()
 
+    @patch.object(submit_hadoop_job.paramiko, "RSAKey")
+    @patch.object(submit_hadoop_job.paramiko, "SSHClient")
+    def test_remote_output_is_bounded_and_client_is_closed(self, ssh_client_cls, rsa_key_cls):
+        client = ssh_client_cls.return_value
+        oversized = b"x" * (submit_hadoop_job.MAX_REMOTE_OUTPUT_BYTES + 1)
+        client.exec_command.return_value = (
+            MagicMock(),
+            FakeStream(oversized, exit_status=0),
+            FakeStream(b""),
+        )
+
+        with self.env():
+            with self.assertRaisesRegex(RuntimeError, "remote stdout exceeded"):
+                submit_hadoop_job.submit_hadoop_job(VALID_JOB)
+
+        client.close.assert_called_once_with()
+
     def test_missing_required_environment_returns_generic_submission_error(self):
         with patch.dict(os.environ, {}, clear=True):
             response = submit_hadoop_job.handle_request(VALID_JOB)

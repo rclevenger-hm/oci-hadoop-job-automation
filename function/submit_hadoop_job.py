@@ -8,6 +8,7 @@ from job_command import build_hadoop_command, validate_job_params
 
 
 MAX_REQUEST_BYTES = 64 * 1024
+MAX_REMOTE_OUTPUT_BYTES = 1024 * 1024
 LOGGER = logging.getLogger(__name__)
 
 
@@ -34,6 +35,13 @@ def _with_request_id(response, request_id):
     return {**response, "request_id": request_id}
 
 
+def _read_bounded(stream, label):
+    raw = stream.read(MAX_REMOTE_OUTPUT_BYTES + 1)
+    if len(raw) > MAX_REMOTE_OUTPUT_BYTES:
+        raise RuntimeError(f"remote {label} exceeded {MAX_REMOTE_OUTPUT_BYTES} byte limit")
+    return raw.decode("utf-8", errors="replace")
+
+
 def submit_hadoop_job(job_params):
     params = validate_job_params(job_params)
     instance_ip = _required_env("HADOOP_HOST")
@@ -58,8 +66,8 @@ def submit_hadoop_job(job_params):
         command = build_hadoop_command(params)
         _, stdout, stderr = ssh_client.exec_command(command, timeout=30)
         exit_status = stdout.channel.recv_exit_status()
-        stdout_text = stdout.read().decode("utf-8", errors="replace")
-        stderr_text = stderr.read().decode("utf-8", errors="replace")
+        stdout_text = _read_bounded(stdout, "stdout")
+        stderr_text = _read_bounded(stderr, "stderr")
 
         if exit_status != 0:
             raise RuntimeError(

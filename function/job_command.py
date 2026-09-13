@@ -3,6 +3,7 @@ import shlex
 
 _JOB_CLASS = re.compile(r"^[A-Za-z0-9_.$]+$")
 _REQUIRED_FIELDS = ("jar_path", "job_class", "input_path", "output_path")
+_MAX_FIELD_LENGTH = 4096
 
 
 def validate_job_params(job_params):
@@ -14,6 +15,8 @@ def validate_job_params(job_params):
         value = job_params.get(field)
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"{field} is required and must be a non-empty string")
+        if len(value) > _MAX_FIELD_LENGTH:
+            raise ValueError(f"{field} exceeds {_MAX_FIELD_LENGTH} character limit")
         if "\x00" in value or "\n" in value or "\r" in value:
             raise ValueError(f"{field} contains unsupported control characters")
         clean[field] = value.strip()

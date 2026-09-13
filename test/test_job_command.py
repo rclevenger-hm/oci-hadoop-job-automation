@@ -61,6 +61,17 @@ class JobCommandTests(unittest.TestCase):
                 }
             )
 
+    def test_rejects_excessively_long_fields(self):
+        with self.assertRaisesRegex(ValueError, "input_path exceeds 4096 character limit"):
+            validate_job_params(
+                {
+                    "jar_path": "/tmp/job.jar",
+                    "job_class": "Example",
+                    "input_path": "x" * 4097,
+                    "output_path": "output",
+                }
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

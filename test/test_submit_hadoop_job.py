@@ -80,18 +80,20 @@ class SubmitHadoopJobTests(unittest.TestCase):
 
     @patch.object(submit_hadoop_job.paramiko, "RSAKey")
     @patch.object(submit_hadoop_job.paramiko, "SSHClient")
-    def test_nonzero_exit_surfaces_stderr_in_internal_exception_and_still_closes(self, ssh_client_cls, rsa_key_cls):
+    def test_nonzero_exit_redacts_remote_stderr_and_still_closes(self, ssh_client_cls, rsa_key_cls):
         client = ssh_client_cls.return_value
         client.exec_command.return_value = (
             MagicMock(),
             FakeStream(b"", exit_status=17),
-            FakeStream(b"output path already exists\n"),
+            FakeStream(b"private output path and cluster detail\n"),
         )
 
         with self.env():
-            with self.assertRaisesRegex(RuntimeError, "exit status 17.*output path already exists"):
+            with self.assertRaisesRegex(RuntimeError, "Hadoop command failed with exit status 17") as raised:
                 submit_hadoop_job.submit_hadoop_job(VALID_JOB)
 
+        self.assertNotIn("private output path", str(raised.exception))
+        self.assertNotIn("cluster detail", str(raised.exception))
         client.close.assert_called_once_with()
 
     @patch.object(submit_hadoop_job.paramiko, "RSAKey")

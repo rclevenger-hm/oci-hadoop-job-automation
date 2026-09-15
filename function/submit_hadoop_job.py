@@ -67,12 +67,10 @@ def submit_hadoop_job(job_params):
         _, stdout, stderr = ssh_client.exec_command(command, timeout=30)
         exit_status = stdout.channel.recv_exit_status()
         stdout_text = _read_bounded(stdout, "stdout")
-        stderr_text = _read_bounded(stderr, "stderr")
+        _read_bounded(stderr, "stderr")
 
         if exit_status != 0:
-            raise RuntimeError(
-                f"Hadoop command failed with exit status {exit_status}: {stderr_text.strip()}"
-            )
+            raise RuntimeError(f"Hadoop command failed with exit status {exit_status}")
 
         return stdout_text
     finally:

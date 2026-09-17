@@ -28,6 +28,8 @@ See [`docs/OPERATIONS.md`](docs/OPERATIONS.md) for failure modes, retry guidance
 3. Install dependencies from `function/requirements.txt`.
 4. Deploy the function using your normal OCI Functions workflow.
 
+If you also use the OCI CLI locally, copy [`docs/oci-config.example`](docs/oci-config.example) to your normal user-level OCI config location (typically `~/.oci/config`) and fill in the real values there. The repository-local `.oci/` directory ignores credential/config files so a working local OCI profile is not accidentally committed.
+
 Do not commit private keys or credentials to this repository.
 
 ## Request shape

@@ -1,14 +1,14 @@
 # OCI Hadoop Job Automation
 
-Automate validated Hadoop command submission to an OCI-hosted cluster through an OCI Function and SSH. The project focuses on safe request handling, bounded network execution, and an explicit operational boundary for short-running jobs.
+Automate validated Hadoop command submission to an OCI-hosted cluster through an OCI Function and SSH. The project focuses on safe request handling, bounded output collection, and an explicit operational boundary for short-running jobs.
 
 ## What it demonstrates
 
 - **Validated job requests:** required fields are checked before any remote command is constructed.
 - **Safer command construction:** path arguments are shell-quoted and the Java job class is constrained to an allowlisted character pattern.
 - **SSH trust enforcement:** system host keys are loaded and unknown hosts are rejected rather than automatically trusted.
-- **Bounded remote execution:** connection/authentication setup and remote command execution use explicit timeouts.
-- **Clear failure propagation:** non-zero Hadoop exits and SSH/configuration failures are returned to the caller with useful context.
+- **Bounded output collection:** stdout and stderr are drained together with separate 1 MiB limits and a 30-second application-level completion deadline after SSH accepts the command.
+- **Safe failure propagation:** validation errors remain actionable; non-zero Hadoop exits and SSH/configuration failures return a generic error without remote output.
 
 ## Current execution model
 
@@ -55,11 +55,12 @@ Run the unit tests from the repository root:
 python -m unittest discover -s test -v
 ```
 
-The tests cover expected command construction, shell metacharacter quoting, invalid job-class rejection, missing required fields, and unsupported control characters.
+The tests cover command validation/quoting, request limits, host-key policy, cleanup and error redaction. Real Paramiko receive buffers and a simulated clock exercise concurrent stream draining, output limits, late output, missing exit status and completion deadlines without a live cluster or real-time waits.
 
 ## Operational cautions
 
 - A remote execution timeout is an **unknown outcome**, not proof that the Hadoop command never started.
+- The completion deadline bounds application-level output/status polling, not all SSH internals or the remote process lifetime. See the [runtime contract](docs/OPERATIONS.md#runtime-contract) for its scope.
 - The current API has no idempotency key, so ambiguous failures should be checked against cluster state before retrying.
 - Host-key verification should never be disabled as a recovery shortcut.
 - Raw credentials, key material, and sensitive payloads should not be logged.

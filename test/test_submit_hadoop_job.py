@@ -1,4 +1,3 @@
-import io
 import json
 import os
 import sys
@@ -20,11 +19,15 @@ VALID_JOB = {
 }
 
 
-class FakeStream(io.BytesIO):
-    def __init__(self, body=b"", exit_status=0):
-        super().__init__(body)
-        self.channel = MagicMock()
-        self.channel.recv_exit_status.return_value = exit_status
+def command_result(stdout=b"", stderr=b"", exit_status=0):
+    channel = submit_hadoop_job.paramiko.Channel(0)
+    channel.in_buffer.feed(stdout)
+    channel.in_stderr_buffer.feed(stderr)
+    channel.in_buffer.close()
+    channel.in_stderr_buffer.close()
+    channel.exit_status = exit_status
+    channel.status_event.set()
+    return MagicMock(), channel.makefile("rb"), channel.makefile_stderr("rb")
 
 
 class FakeContext:
@@ -51,9 +54,7 @@ class SubmitHadoopJobTests(unittest.TestCase):
     @patch.object(submit_hadoop_job.paramiko, "SSHClient")
     def test_success_executes_validated_command_and_closes_client(self, ssh_client_cls, rsa_key_cls):
         client = ssh_client_cls.return_value
-        stdout = FakeStream(b"application_123 submitted\n", exit_status=0)
-        stderr = FakeStream(b"")
-        client.exec_command.return_value = (MagicMock(), stdout, stderr)
+        client.exec_command.return_value = command_result(b"application_123 submitted\n")
         rsa_key_cls.return_value = MagicMock(name="key")
 
         with self.env():
@@ -82,10 +83,8 @@ class SubmitHadoopJobTests(unittest.TestCase):
     @patch.object(submit_hadoop_job.paramiko, "SSHClient")
     def test_nonzero_exit_redacts_remote_stderr_and_still_closes(self, ssh_client_cls, rsa_key_cls):
         client = ssh_client_cls.return_value
-        client.exec_command.return_value = (
-            MagicMock(),
-            FakeStream(b"", exit_status=17),
-            FakeStream(b"private output path and cluster detail\n"),
+        client.exec_command.return_value = command_result(
+            stderr=b"private output path and cluster detail\n", exit_status=17,
         )
 
         with self.env():
@@ -101,11 +100,7 @@ class SubmitHadoopJobTests(unittest.TestCase):
     def test_remote_output_is_bounded_and_client_is_closed(self, ssh_client_cls, rsa_key_cls):
         client = ssh_client_cls.return_value
         oversized = b"x" * (submit_hadoop_job.MAX_REMOTE_OUTPUT_BYTES + 1)
-        client.exec_command.return_value = (
-            MagicMock(),
-            FakeStream(oversized, exit_status=0),
-            FakeStream(b""),
-        )
+        client.exec_command.return_value = command_result(stdout=oversized)
 
         with self.env():
             with self.assertRaisesRegex(RuntimeError, "remote stdout exceeded"):

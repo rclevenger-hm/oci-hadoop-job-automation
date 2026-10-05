@@ -32,7 +32,10 @@ All four fields are required. Paths are shell-quoted before execution and `job_c
 ## Operational behavior
 
 - SSH connection/authentication timeouts are bounded.
-- Non-zero Hadoop exit codes are returned as errors with stderr context.
+- After the SSH exec request is accepted, stdout and stderr are drained fairly using nonblocking reads, with a separate 1 MiB limit on each stream.
+- Output/status polling has one 30-second monotonic deadline; output does not reset it. The deadline does not bound SSH exec-request acknowledgment or Paramiko's internal transport writes. The OCI Function execution limit remains the outer runtime safeguard.
+- The function waits for both output streams to reach EOF and for an available exit status before reporting success. Non-zero or missing exit status, oversized output, timeout and transport failures return a generic error without remote output.
+- Completion timeouts have an unknown remote outcome and are never automatically retried. Closing SSH does not prove that the Hadoop process stopped.
 - SSH sessions are closed in a `finally` block.
 - Request/configuration errors are returned without exposing credentials.
 

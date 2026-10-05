@@ -10,19 +10,24 @@ The function requires:
 - `HADOOP_PRIVATE_KEY`: path to the private key available to the function runtime.
 - `HADOOP_USER`: optional SSH username; defaults to `opc`.
 
-The SSH client loads known host keys and rejects unknown hosts. Connection, banner, and authentication setup are bounded by 10-second timeouts. Remote command execution is bounded by a 30-second timeout.
+The SSH client loads known host keys and rejects unknown hosts. Connection, banner, and authentication setup use 10-second timeouts. The SSH channel is opened with a 30-second timeout.
+
+After the server accepts the SSH exec request, output/status polling uses a single 30-second monotonic deadline. Both stdout and stderr are drained in alternating chunks, with a separate 1 MiB limit for each stream; stderr is discarded rather than returned or included in output-limit errors. Output arrival does not extend the deadline. The function reads exit status only when it is ready and both streams have reached EOF, so a full SSH receive window cannot deadlock a premature status wait and a status received early cannot truncate later output.
+
+This is an application-level completion deadline, not a hard wall-clock bound across the entire SSH stack: the exec-request acknowledgment happens before the deadline starts, and Paramiko receive calls can perform internal transport writes such as window updates. Keep the OCI Function execution limit as an independent outer safeguard. Closing the SSH client after a timeout or output-limit error does not prove that the remote Hadoop process stopped; check cluster state before any retry.
 
 ## Primary failure modes
 
 | Failure | Expected symptom | First checks | Recovery |
 | --- | --- | --- | --- |
-| Missing configuration | Function returns a required-environment-variable error | Function configuration | Restore the missing setting and redeploy/reinvoke |
+| Missing configuration | Generic submission error; missing variable name in function logs | Function configuration | Restore the missing setting and redeploy/reinvoke |
 | Host-key mismatch / unknown host | SSH connection fails before command execution | Known-hosts material and target identity | Verify the instance identity before updating known-hosts data |
 | Network or NSG failure | SSH connection timeout | VCN route, NSGs/security lists, target SSH listener | Restore connectivity; do not weaken host-key policy as a workaround |
 | Authentication failure | SSH authentication exception | Key file availability, ownership, target authorized keys, username | Restore the intended key/user mapping |
 | Invalid request | Validation error before SSH | Required fields and job class | Correct the request; do not bypass validation |
-| Hadoop process failure | Non-zero exit status with stderr | Hadoop/YARN logs and stderr | Correct the job or cluster condition, then retry deliberately |
-| Execution timeout | Function-side SSH command timeout | Job duration and cluster health | Determine whether this workload belongs in the current synchronous execution model |
+| Hadoop process failure | Generic submission error; exit code in function logs | Hadoop/YARN logs on the cluster | Correct the job or cluster condition, then retry deliberately |
+| Completion timeout | Generic submission error; completion timeout in function logs | Job duration and cluster health | Check the unknown remote outcome before retrying; consider the asynchronous model |
+| Excessive output | Generic submission error; stdout/stderr byte-limit category in function logs | Job verbosity and cluster state | Check whether the command is still running before changing output volume and retrying |
 
 ## Incident triage
 
@@ -59,7 +64,7 @@ Avoid logging private-key material, authentication data, or raw payloads by defa
 
 ## Synchronous execution boundary
 
-The current function waits for `recv_exit_status()` and then reads stdout/stderr. That makes it appropriate for short commands that complete inside the execution envelope, but it is not a reliable control plane for long-running Hadoop workloads.
+The current function drains stdout/stderr while polling for completion, then reads an already-available exit status. It remains appropriate for short commands that complete inside the execution envelope, but it is not a reliable control plane for long-running Hadoop workloads. It does not cancel or reconcile a remote job when the local completion deadline expires.
 
 For long jobs, the safer evolution is:
 
@@ -79,7 +84,7 @@ Before merging changes that affect submission behavior:
 - run the unit test suite;
 - verify shell quoting and job-class validation remain intact;
 - confirm unknown SSH hosts are still rejected;
-- confirm all network operations remain bounded by timeouts;
+- confirm connection timeouts, completion polling deadline and output limits remain intact, and document any change to their scope;
 - document any retry/idempotency behavior change;
 - test error messages for useful context without leaking credentials;
 - distinguish a submitted job from a completed job in documentation and API responses.

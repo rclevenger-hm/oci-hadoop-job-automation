@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import socket
+import time
 
 import paramiko
 
@@ -9,6 +11,9 @@ from job_command import build_hadoop_command, validate_job_params
 
 MAX_REQUEST_BYTES = 64 * 1024
 MAX_REMOTE_OUTPUT_BYTES = 1024 * 1024
+REMOTE_COMPLETION_TIMEOUT_SECONDS = 30
+_OUTPUT_CHUNK_BYTES = 32 * 1024
+_OUTPUT_POLL_SECONDS = 0.01
 LOGGER = logging.getLogger(__name__)
 
 
@@ -35,11 +40,53 @@ def _with_request_id(response, request_id):
     return {**response, "request_id": request_id}
 
 
-def _read_bounded(stream, label):
-    raw = stream.read(MAX_REMOTE_OUTPUT_BYTES + 1)
-    if len(raw) > MAX_REMOTE_OUTPUT_BYTES:
-        raise RuntimeError(f"remote {label} exceeded {MAX_REMOTE_OUTPUT_BYTES} byte limit")
-    return raw.decode("utf-8", errors="replace")
+def _collect_remote_result(channel):
+    """Drain both streams with an application-level output/status deadline.
+
+    Nonblocking reads avoid waiting for input; Paramiko's internal transport
+    writes (for example, receive-window updates) retain their own behavior.
+    """
+    deadline = time.monotonic() + REMOTE_COMPLETION_TIMEOUT_SECONDS
+    channel.settimeout(0.0)
+    stdout = bytearray()
+    sizes = {"stdout": 0, "stderr": 0}
+    finished = set()
+    readers = (("stdout", channel.recv), ("stderr", channel.recv_stderr))
+
+    while True:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("remote command completion timed out; outcome is unknown")
+
+        received_output = False
+        for label, receive in readers:
+            if label in finished:
+                continue
+            # Read at most one byte beyond the limit, and give both streams a
+            # turn so a full stderr window cannot block stdout completion.
+            size = min(_OUTPUT_CHUNK_BYTES, MAX_REMOTE_OUTPUT_BYTES - sizes[label] + 1)
+            try:
+                chunk = receive(size)
+            except socket.timeout:
+                continue
+            if not chunk:
+                finished.add(label)
+                continue
+            received_output = True
+            sizes[label] += len(chunk)
+            if sizes[label] > MAX_REMOTE_OUTPUT_BYTES:
+                raise RuntimeError(
+                    f"remote {label} exceeded {MAX_REMOTE_OUTPUT_BYTES} byte limit"
+                )
+            if label == "stdout":
+                stdout.extend(chunk)
+
+        # An exit status may arrive before the final output. Wait for both
+        # streams' EOF as well, but never call recv_exit_status while it blocks.
+        if len(finished) == 2 and channel.exit_status_ready():
+            return channel.recv_exit_status(), stdout.decode("utf-8", errors="replace")
+
+        if not received_output:
+            time.sleep(min(_OUTPUT_POLL_SECONDS, max(0, deadline - time.monotonic())))
 
 
 def submit_hadoop_job(job_params):
@@ -64,10 +111,10 @@ def submit_hadoop_job(job_params):
         )
 
         command = build_hadoop_command(params)
-        _, stdout, stderr = ssh_client.exec_command(command, timeout=30)
-        exit_status = stdout.channel.recv_exit_status()
-        stdout_text = _read_bounded(stdout, "stdout")
-        _read_bounded(stderr, "stderr")
+        _stdin, stdout, _stderr = ssh_client.exec_command(
+            command, timeout=REMOTE_COMPLETION_TIMEOUT_SECONDS
+        )
+        exit_status, stdout_text = _collect_remote_result(stdout.channel)
 
         if exit_status != 0:
             raise RuntimeError(f"Hadoop command failed with exit status {exit_status}")
@@ -86,7 +133,7 @@ def handle_request(request, request_id=None):
         }
     except ValueError as exc:
         return {"error": str(exc)}
-    except (RuntimeError, OSError, paramiko.SSHException):
+    except (RuntimeError, OSError, EOFError, paramiko.SSHException):
         LOGGER.exception(
             "Hadoop job submission failed request_id=%s",
             request_id or "unknown",

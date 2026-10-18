@@ -27,7 +27,7 @@ Unknown SSH host keys are rejected. Provision the expected host key in the funct
 }
 ```
 
-All four fields are required. Paths are shell-quoted before execution and `job_class` is restricted to Java-style class-name characters. Newlines, carriage returns, and NUL bytes are rejected.
+All four fields are required and shell-quoted before execution. `job_class` is also restricted to Java-style class-name characters; nested classes such as `com.example.Outer$Inner` reach Hadoop unchanged, without shell variable expansion. Newlines, carriage returns, and NUL bytes are rejected.
 
 ## Operational behavior
 

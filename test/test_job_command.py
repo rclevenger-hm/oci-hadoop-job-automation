@@ -1,4 +1,8 @@
+import os
 import pathlib
+import shlex
+import shutil
+import subprocess
 import sys
 import unittest
 
@@ -34,6 +38,44 @@ class JobCommandTests(unittest.TestCase):
         self.assertIn("'/tmp/job.jar; touch /tmp/pwned'", command)
         self.assertIn("'$(whoami)'", command)
         self.assertIn("'out && false'", command)
+
+    @unittest.skipUnless(shutil.which("sh"), "Remote command requires a POSIX shell")
+    def test_preserves_java_class_names_through_remote_shell(self):
+        job_classes = (
+            "com.example.WordCount",
+            "com.example.Outer$Inner",
+            "com.example.Outer$$Lambda",
+            "com.example.Outer$1",
+            "com.example.$Inner$Nested",
+        )
+        environments = (
+            {key: value for key, value in os.environ.items() if key not in ("Inner", "Nested")},
+            {**os.environ, "Inner": "Expanded Class", "Nested": "Wrong"},
+        )
+        for job_class, environment in ((c, e) for c in job_classes for e in environments):
+            with self.subTest(job_class=job_class, inner=environment.get("Inner")):
+                params = {
+                    "jar_path": "/opt/jobs/example job.jar",
+                    "job_class": job_class,
+                    "input_path": "oci://bucket/input data",
+                    "output_path": "oci://bucket/output data",
+                }
+                command = build_hadoop_command(params)
+                # The fake Hadoop command captures argv after real shell expansion.
+                # Parsing with shlex.split alone would miss variable/PID expansion.
+                completed = subprocess.run(
+                    [shutil.which("sh"), "-c",
+                     'hadoop() { printf "%s\\0" "$@"; }; ' + command,
+                     "test-shell", "ExpandedPositional"],
+                    env=environment,
+                    capture_output=True,
+                    check=True,
+                    timeout=5,
+                )
+                expected = ["jar", params["jar_path"], job_class,
+                            params["input_path"], params["output_path"]]
+                self.assertEqual(completed.stdout.decode().split("\0")[:-1], expected)
+                self.assertEqual(shlex.split(command), ["hadoop", *expected])
 
     def test_rejects_invalid_job_class(self):
         with self.assertRaises(ValueError):

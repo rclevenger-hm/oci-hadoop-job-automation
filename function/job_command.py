@@ -31,7 +31,7 @@ def build_hadoop_command(job_params):
     params = validate_job_params(job_params)
     return "hadoop jar {jar} {job_class} {input_path} {output_path}".format(
         jar=shlex.quote(params["jar_path"]),
-        job_class=params["job_class"],
+        job_class=shlex.quote(params["job_class"]),
         input_path=shlex.quote(params["input_path"]),
         output_path=shlex.quote(params["output_path"]),
     )

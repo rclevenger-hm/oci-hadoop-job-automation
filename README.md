@@ -5,7 +5,7 @@ Automate validated Hadoop command submission to an OCI-hosted cluster through an
 ## What it demonstrates
 
 - **Validated job requests:** required fields are checked before any remote command is constructed.
-- **Safer command construction:** path arguments are shell-quoted and the Java job class is constrained to an allowlisted character pattern.
+- **Safer command construction:** all request arguments are shell-quoted, including Java job classes with literal `$` characters. Job classes are also constrained to an allowlisted character pattern.
 - **SSH trust enforcement:** system host keys are loaded and unknown hosts are rejected rather than automatically trusted.
 - **Bounded output collection:** stdout and stderr are drained together with separate 1 MiB limits and a 30-second application-level completion deadline after SSH accepts the command.
 - **Safe failure propagation:** validation errors remain actionable; non-zero Hadoop exits and SSH/configuration failures return a generic error without remote output.

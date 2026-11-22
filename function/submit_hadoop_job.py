@@ -125,15 +125,20 @@ def submit_hadoop_job(job_params):
 
 
 def handle_request(request, request_id=None):
+    # Only input validation errors are safe to expose. SSH/key/runtime code can
+    # also raise ValueError, whose message is not part of the public contract.
     try:
-        job_status = submit_hadoop_job(request)
+        params = validate_job_params(request)
+    except ValueError as exc:
+        return {"error": str(exc)}
+
+    try:
+        job_status = submit_hadoop_job(params)
         return {
             "message": "Hadoop job submitted successfully",
             "job_status": job_status,
         }
-    except ValueError as exc:
-        return {"error": str(exc)}
-    except (RuntimeError, OSError, EOFError, paramiko.SSHException):
+    except (ValueError, RuntimeError, OSError, EOFError, paramiko.SSHException):
         LOGGER.exception(
             "Hadoop job submission failed request_id=%s",
             request_id or "unknown",

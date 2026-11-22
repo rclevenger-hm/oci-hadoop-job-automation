@@ -16,6 +16,13 @@ After the server accepts the SSH exec request, output/status polling uses a sing
 
 This is an application-level completion deadline, not a hard wall-clock bound across the entire SSH stack: the exec-request acknowledgment happens before the deadline starts, and Paramiko receive calls can perform internal transport writes such as window updates. Keep the OCI Function execution limit as an independent outer safeguard. Closing the SSH client after a timeout or output-limit error does not prove that the remote Hadoop process stopped; check cluster state before any retry.
 
+Only errors from request-field validation are returned with their actionable
+messages. Once validation passes, internal failures (including `ValueError`
+from SSH or key setup) use the generic `job submission failed` response and the
+invocation identifier when available. Internal exception messages are not
+request-validation guidance. Existing function exception logs are operator-only
+and may contain runtime details; restrict access and retention accordingly.
+
 ## Primary failure modes
 
 | Failure | Expected symptom | First checks | Recovery |

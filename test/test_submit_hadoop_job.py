@@ -121,10 +121,51 @@ class SubmitHadoopJobTests(unittest.TestCase):
         self.assertNotIn("private host", json.dumps(response))
 
     @patch.object(submit_hadoop_job, "submit_hadoop_job")
-    def test_validation_errors_remain_actionable_client_errors(self, submit):
-        submit.side_effect = ValueError("job_class is required")
-        response = submit_hadoop_job.handle_request(VALID_JOB)
-        self.assertEqual(response, {"error": "job_class is required"})
+    def test_validation_errors_remain_actionable_without_submitting(self, submit):
+        cases = [
+            (None, "job parameters must be an object"),
+            ({**VALID_JOB, "job_class": ""}, "job_class is required"),
+            ({**VALID_JOB, "job_class": "Bad;Class"}, "job_class contains unsupported"),
+            ({**VALID_JOB, "input_path": "x" * 4097}, "input_path exceeds"),
+            ({**VALID_JOB, "output_path": "line\nnext"}, "output_path contains unsupported"),
+        ]
+        for request, expected in cases:
+            with self.subTest(expected=expected):
+                response = submit_hadoop_job.handle_request(request)
+                self.assertIn(expected, response["error"])
+        submit.assert_not_called()
+
+    @patch.object(submit_hadoop_job, "submit_hadoop_job")
+    def test_internal_value_error_is_not_a_client_validation_error(self, submit):
+        submit.side_effect = ValueError("private runtime detail")
+        with self.assertLogs(submit_hadoop_job.LOGGER, level="ERROR") as logs:
+            response = submit_hadoop_job.handler(
+                FakeContext("call-internal-value"), json.dumps(VALID_JOB).encode("utf-8")
+            )
+        self.assertEqual(response, {
+            "error": "job submission failed", "request_id": "call-internal-value"
+        })
+        self.assertIn("call-internal-value", "\n".join(logs.output))
+
+    @patch.object(submit_hadoop_job, "submit_hadoop_job")
+    def test_normalized_request_is_submitted_without_mutating_input(self, submit):
+        submit.return_value = "submitted"
+        request = {field: "  " + value + "  " for field, value in VALID_JOB.items()}
+        original = dict(request)
+        response = submit_hadoop_job.handle_request(request)
+        submit.assert_called_once_with(VALID_JOB)
+        self.assertEqual(request, original)
+        self.assertEqual(response["job_status"], "submitted")
+
+    @patch.object(submit_hadoop_job.paramiko, "RSAKey")
+    @patch.object(submit_hadoop_job.paramiko, "SSHClient")
+    def test_key_setup_value_error_is_redacted_and_client_closed(self, ssh_client_cls, rsa_key_cls):
+        rsa_key_cls.side_effect = ValueError("private key detail")
+        with self.env(), self.assertLogs(submit_hadoop_job.LOGGER, level="ERROR"):
+            response = submit_hadoop_job.handle_request(VALID_JOB)
+        self.assertEqual(response, {"error": "job submission failed"})
+        ssh_client_cls.return_value.connect.assert_not_called()
+        ssh_client_cls.return_value.close.assert_called_once_with()
 
     def test_invalid_json_handler_returns_safe_error(self):
         response = submit_hadoop_job.handler(None, b"{not-json")

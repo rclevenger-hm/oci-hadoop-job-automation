@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import os
@@ -5,6 +6,7 @@ import socket
 import time
 
 import paramiko
+from fdk.response import Response
 
 from job_command import build_hadoop_command, validate_job_params
 
@@ -146,9 +148,7 @@ def handle_request(request, request_id=None):
         return {"error": "job submission failed"}
 
 
-def handler(ctx, data):
-    request_id = _request_id(ctx)
-
+def _handle_body(data, request_id):
     if not isinstance(data, (bytes, bytearray)):
         return _with_request_id({"error": "request body must be bytes"}, request_id)
     if len(data) > MAX_REQUEST_BYTES:
@@ -164,3 +164,17 @@ def handler(ctx, data):
 
     response = handle_request(request, request_id=request_id)
     return _with_request_id(response, request_id)
+
+
+def handler(ctx, data):
+    request_id = _request_id(ctx)
+    if isinstance(data, io.BytesIO):
+        # Fn gives us an in-memory stream. Read one extra byte so oversized
+        # bodies cannot be accepted after truncation to a valid JSON prefix.
+        payload = _handle_body(data.read(MAX_REQUEST_BYTES + 1), request_id)
+        return Response(
+            ctx,
+            response_data=json.dumps(payload),
+            headers={"Content-Type": "application/json"},
+        )
+    return _handle_body(data, request_id)

@@ -18,6 +18,14 @@ Unknown SSH host keys are rejected. Provision the expected host key in the funct
 
 ## Request contract
 
+Configure the Python FDK to run `handler` from `submit_hadoop_job.py`
+(for example, `/python/bin/fdk /function/submit_hadoop_job.py handler`).
+OCI Functions passes the request as a byte stream. The handler reads at most 64 KiB
+plus one byte to detect oversized requests before submission. The FDK itself
+buffers the request upstream. Invocation responses are JSON with an
+`application/json` content type and include the OCI call ID when available.
+Direct Python calls supplying raw bytes still receive a dictionary.
+
 ```json
 {
   "jar_path": "/opt/jobs/wordcount.jar",
